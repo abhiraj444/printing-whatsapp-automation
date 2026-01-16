@@ -123,8 +123,18 @@ async function handleDocumentMessage(
         // Add to job
         addFileToJob(phoneNumber, { fileName, filePath });
 
-        // Send acknowledgment
+        // Send acknowledgment to customer
         await sendMessage(sock, phoneNumber, `📄 Received: ${fileName}`);
+
+        // Notify shop owner (if enabled)
+        if (CONFIG.NOTIFY_OWNER) {
+            const sizeInMB = (buffer.length / (1024 * 1024)).toFixed(2);
+            await sendMessage(
+                sock,
+                CONFIG.OWNER_PHONE,
+                `📥 *New File Downloaded*\n\n👤 From: ${phoneNumber}\n📄 File: ${fileName}\n📊 Size: ${sizeInMB} MB\n📁 Folder: downloads/${phoneNumber}/`
+            );
+        }
 
     } catch (error) {
         logger.error({ error, phoneNumber, fileName }, 'Failed to download document');
@@ -134,7 +144,10 @@ async function handleDocumentMessage(
 
 async function handleTextMessage(sock: any, phoneNumber: string, text: string) {
     const sendMessageFunc = (msg: string) => sendMessage(sock, phoneNumber, msg);
-    await handleUserMessage(phoneNumber, text, sendMessageFunc);
+    const ownerNotifyFunc = CONFIG.NOTIFY_OWNER
+        ? (msg: string) => sendMessage(sock, CONFIG.OWNER_PHONE, msg)
+        : undefined;
+    await handleUserMessage(phoneNumber, text, sendMessageFunc, ownerNotifyFunc);
 }
 
 async function sendMessage(sock: any, phoneNumber: string, text: string) {

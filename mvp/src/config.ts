@@ -13,4 +13,8 @@ export const CONFIG = {
     // Printer (you'll need to update these)
     PRINTER_NAME: 'Canon iR 7105', // Update with your actual printer name
     MAILBOX_NAME: 'YourMailbox',    // Update with your mailbox name
+
+    // Shop Owner Notifications
+    OWNER_PHONE: '919876543210',    // ⚠️ UPDATE: Your WhatsApp number (without +)
+    NOTIFY_OWNER: true,              // Set to false to disable notifications
 };

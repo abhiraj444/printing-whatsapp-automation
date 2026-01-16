@@ -15,7 +15,12 @@ import { CONFIG } from './config';
 import { logger } from './logger';
 import { JobFile } from './types';
 
-export async function handleUserMessage(phoneNumber: string, messageText: string, sendMessage: (text: string) => Promise<void>) {
+export async function handleUserMessage(
+    phoneNumber: string,
+    messageText: string,
+    sendMessage: (text: string) => Promise<void>,
+    ownerNotify?: (text: string) => Promise<void>
+) {
     const job = getJob(phoneNumber);
 
     if (!job) {
@@ -34,7 +39,7 @@ export async function handleUserMessage(phoneNumber: string, messageText: string
 
             case 'AWAITING_CONFIRMATION':
                 if (text === 'YES') {
-                    await handleConfirmPrint(phoneNumber, sendMessage);
+                    await handleConfirmPrint(phoneNumber, sendMessage, ownerNotify);
                 } else if (text === 'SKIP') {
                     await handleSkipRequest(phoneNumber, sendMessage);
                 } else {
@@ -48,7 +53,7 @@ export async function handleUserMessage(phoneNumber: string, messageText: string
 
             case 'AWAITING_FINAL_CONFIRMATION':
                 if (text === 'YES') {
-                    await handleConfirmPrint(phoneNumber, sendMessage);
+                    await handleConfirmPrint(phoneNumber, sendMessage, ownerNotify);
                 } else {
                     await sendMessage('Reply YES to confirm printing');
                 }
@@ -79,7 +84,11 @@ async function handlePendingJob(phoneNumber: string, sendMessage: (text: string)
     await sendMessage(formatFileList(job.files, totalPages, totalCost));
 }
 
-async function handleConfirmPrint(phoneNumber: string, sendMessage: (text: string) => Promise<void>) {
+async function handleConfirmPrint(
+    phoneNumber: string,
+    sendMessage: (text: string) => Promise<void>,
+    ownerNotify?: (text: string) => Promise<void>
+) {
     const job = getJob(phoneNumber);
     if (!job) return;
 
@@ -107,9 +116,17 @@ async function handleConfirmPrint(phoneNumber: string, sendMessage: (text: strin
     const totalPages = getTotalPages(filesToPrint);
     const totalCost = calculatePrice(totalPages);
 
-    // Send completion message
+    // Send completion message to customer
     updateJobState(phoneNumber, 'COMPLETED');
     await sendMessage(formatCompleted(filesToPrint.length, totalPages, totalCost, phoneNumber));
+
+    // Notify shop owner (if enabled)
+    if (CONFIG.NOTIFY_OWNER && ownerNotify) {
+        const fileList = filesToPrint.map(f => `  • ${f.fileName} (${f.pageCount} pages)`).join('\n');
+        await ownerNotify(
+            `🖨️ *Print Job Sent to Mailbox*\n\n👤 Customer: ${phoneNumber}\n📄 Files: ${filesToPrint.length}\n${fileList}\n\n📊 Total Pages: ${totalPages}\n💰 Amount: ₹${totalCost.toFixed(2)}\n📁 Mailbox: Files start with ${phoneNumber}_*`
+        );
+    }
 
     // Clean up job after some time
     setTimeout(() => deleteJob(phoneNumber), 60000); // Delete after 1 minute
