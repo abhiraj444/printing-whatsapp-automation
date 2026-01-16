@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: evolution-db
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution123
+      POSTGRES_DB: evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  evolution-api:
+    image: atendai/evolution-api:latest
+    container_name: evolution-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Server
+      SERVER_URL: http://localhost:8080
+      
+      # Authentication
+      AUTHENTICATION_API_KEY: my-print-bot-key
+      
+      # Database
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution123@postgres:5432/evolution
+      
+      # Instance settings
+      CONFIG_SESSION_PHONE_CLIENT: PrintBot
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      
+      # Log
+      LOG_LEVEL: INFO
+    ports:
+      - "8080:8080"
+    volumes:
+      - evolution_data:/evolution/instances
+
+volumes:
+  postgres_data:
+  evolution_data:

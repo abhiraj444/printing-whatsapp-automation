@@ -1,0 +1,2 @@
+This is a test print from the WhatsApp Bot.
+If you can read this, the basic print command works.

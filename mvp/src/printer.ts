@@ -8,15 +8,15 @@ const execAsync = promisify(exec);
 export async function printToPrinter(filePaths: string[]): Promise<void> {
     for (const filePath of filePaths) {
         try {
-            // Use Windows native print command
-            // This assumes you have your printer settings saved in the driver
-            const command = `print /D:"${CONFIG.PRINTER_NAME}" "${filePath}"`;
+            // Use PowerShell to print (relies on default application for the file type)
+            // This is more robust for modern printers and PDFs
+            const psCommand = `Start-Process -FilePath "${filePath}" -Verb Print`;
+            await execAsync(`powershell -Command "${psCommand}"`);
 
-            await execAsync(command);
-            logger.info({ filePath }, 'Sent to printer');
+            logger.info({ filePath }, 'Sent to printer via PowerShell');
 
             // Small delay between files to avoid overwhelming the spooler
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
         } catch (error) {
             logger.error({ error, filePath }, 'Failed to print file');

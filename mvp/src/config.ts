@@ -12,7 +12,7 @@ export const CONFIG = {
 
     // Printer (you'll need to update these)
     PRINTER_NAME: 'PSY_PSY_237_BW_CANON(2)', // Update with your actual printer name
-    MAILBOX_NAME: 'YourMailbox',    // Update with your mailbox name
+    // MAILBOX_NAME: 'YourMailbox',    // Update with your mailbox name
 
     // Shop Owner Notifications
     OWNER_PHONE: '917840957524',    //update r WhatsApp number (without +)
