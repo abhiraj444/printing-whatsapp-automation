@@ -11,10 +11,10 @@ export const CONFIG = {
     PRICE_PER_PAGE: 0.50,
 
     // Printer (you'll need to update these)
-    PRINTER_NAME: 'Canon iR 7105', // Update with your actual printer name
+    PRINTER_NAME: 'PSY_PSY_237_BW_CANON(2)', // Update with your actual printer name
     MAILBOX_NAME: 'YourMailbox',    // Update with your mailbox name
 
     // Shop Owner Notifications
-    OWNER_PHONE: '919876543210',    // ⚠️ UPDATE: Your WhatsApp number (without +)
+    OWNER_PHONE: '917840957524',    //update r WhatsApp number (without +)
     NOTIFY_OWNER: true,              // Set to false to disable notifications
 };

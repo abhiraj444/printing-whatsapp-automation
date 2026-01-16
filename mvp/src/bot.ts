@@ -1,11 +1,4 @@
-import makeWASocket, {
-    DisconnectReason,
-    useMultiFileAuthState,
-    downloadMediaMessage,
-    WAMessage,
-    proto
-} from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
+import { Client, LocalAuth, Message, Chat } from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs/promises';
 import path from 'path';
@@ -15,68 +8,77 @@ import { getOrCreateJob, addFileToJob, getJob } from './job-manager';
 import { handleUserMessage } from './workflow';
 import { formatPDFOnly } from './messages';
 
+let client: Client;
+
+// Store timers per user for 60-second wait
+const notificationTimers = new Map<string, NodeJS.Timeout>();
+
+// Store last message chat object per user to reply later
+const userChats = new Map<string, Chat>();
+
 export async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState(CONFIG.AUTH_PATH);
-
-    const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true,
-        logger: logger as any,
-    });
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            console.log('\n🔗 Scan this QR code with WhatsApp:\n');
-            qrcode.generate(qr, { small: true });
-        }
-
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            logger.info({ shouldReconnect }, 'Connection closed');
-
-            if (shouldReconnect) {
-                startBot();
-            }
-        } else if (connection === 'open') {
-            logger.info('✅ WhatsApp connected!');
+    client = new Client({
+        authStrategy: new LocalAuth({
+            dataPath: CONFIG.AUTH_PATH
+        }),
+        puppeteer: {
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         }
     });
 
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        for (const message of messages) {
-            await handleIncomingMessage(sock, message);
-        }
+    client.on('qr', (qr) => {
+        console.log('\n🔗 Scan this QR code with WhatsApp:\n');
+        qrcode.generate(qr, { small: true });
     });
 
-    return sock;
+    client.on('ready', () => {
+        logger.info('✅ WhatsApp connected!');
+    });
+
+    client.on('authenticated', () => {
+        logger.info('WhatsApp authenticated');
+    });
+
+    client.on('auth_failure', (msg) => {
+        logger.error({ msg }, 'WhatsApp authentication failed');
+    });
+
+    client.on('disconnected', (reason) => {
+        logger.warn({ reason }, 'WhatsApp disconnected');
+    });
+
+    client.on('message', async (message: Message) => {
+        await handleIncomingMessage(message);
+    });
+
+    await client.initialize();
+    return client;
 }
 
-async function handleIncomingMessage(sock: any, message: WAMessage) {
+async function handleIncomingMessage(message: Message) {
     try {
-        // Skip if message is from self or status broadcast
-        if (!message.message || message.key.fromMe) return;
+        // Skip if message is from self or status
+        if (message.fromMe || message.from === 'status@broadcast') return;
 
-        const phoneNumber = message.key.remoteJid?.replace('@s.whatsapp.net', '') || '';
-        if (!phoneNumber) return;
+        const contact = await message.getContact();
+        const phoneNumber = contact.number;
 
-        logger.info({ phoneNumber, messageType: Object.keys(message.message || {})[0] }, 'Received message');
+        // Store the chat object for later use
+        const chat = await message.getChat();
+        userChats.set(phoneNumber, chat);
+
+        logger.info({ phoneNumber, type: message.type }, 'Received message');
 
         // Check if it's a document (PDF)
-        const documentMessage = message.message?.documentMessage;
-        if (documentMessage) {
-            await handleDocumentMessage(sock, message, phoneNumber, documentMessage);
+        if (message.hasMedia && message.type === 'document') {
+            await handleDocumentMessage(message, phoneNumber);
             return;
         }
 
-        // Check if it's a text message
-        const textMessage = message.message?.conversation ||
-            message.message?.extendedTextMessage?.text;
-        if (textMessage) {
-            await handleTextMessage(sock, phoneNumber, textMessage);
+        // Handle text messages
+        if (message.type === 'chat') {
+            await handleTextMessage(phoneNumber, message.body);
             return;
         }
 
@@ -85,37 +87,36 @@ async function handleIncomingMessage(sock: any, message: WAMessage) {
     }
 }
 
-async function handleDocumentMessage(
-    sock: any,
-    message: WAMessage,
-    phoneNumber: string,
-    documentMessage: proto.Message.IDocumentMessage
-) {
-    const fileName = documentMessage.fileName || 'document.pdf';
-    const mimeType = documentMessage.mimetype || '';
-
-    // Check if it's a PDF
-    if (!mimeType.includes('pdf') && !fileName.toLowerCase().endsWith('.pdf')) {
-        await sendMessage(sock, phoneNumber, formatPDFOnly());
-        return;
-    }
-
-    // Check if user has a job in progress (PROCESSING or PRINTING state)
-    const existingJob = getJob(phoneNumber);
-    if (existingJob && (existingJob.state === 'PROCESSING' || existingJob.state === 'PRINTING')) {
-        await sendMessage(sock, phoneNumber, '⚠️ Previous job is in progress. Please wait for completion.');
-        return;
-    }
-
+async function handleDocumentMessage(message: Message, phoneNumber: string) {
     try {
-        // Download the file
-        const buffer = await downloadMediaMessage(message, 'buffer', {}) as Buffer;
+        const media = await message.downloadMedia();
+
+        if (!media) {
+            await sendMessageToUser(phoneNumber, '❌ Failed to download file. Please try again.');
+            return;
+        }
+
+        const fileName = media.filename || 'document.pdf';
+
+        // Check if it's a PDF
+        if (!media.mimetype.includes('pdf') && !fileName.toLowerCase().endsWith('.pdf')) {
+            await sendMessageToUser(phoneNumber, formatPDFOnly());
+            return;
+        }
+
+        // Check if user has a job in progress
+        const existingJob = getJob(phoneNumber);
+        if (existingJob && (existingJob.state === 'PROCESSING' || existingJob.state === 'PRINTING')) {
+            await sendMessageToUser(phoneNumber, '⚠️ Previous job is in progress. Please wait for completion.');
+            return;
+        }
 
         // Save to user folder
         const userDir = path.join(CONFIG.DOWNLOAD_PATH, phoneNumber);
         await fs.mkdir(userDir, { recursive: true });
 
         const filePath = path.join(userDir, fileName);
+        const buffer = Buffer.from(media.data, 'base64');
         await fs.writeFile(filePath, buffer);
 
         logger.info({ phoneNumber, fileName, size: buffer.length }, 'Downloaded PDF');
@@ -123,38 +124,90 @@ async function handleDocumentMessage(
         // Add to job
         addFileToJob(phoneNumber, { fileName, filePath });
 
-        // Send acknowledgment to customer
-        await sendMessage(sock, phoneNumber, `📄 Received: ${fileName}`);
-
-        // Notify shop owner (if enabled)
-        if (CONFIG.NOTIFY_OWNER) {
-            const sizeInMB = (buffer.length / (1024 * 1024)).toFixed(2);
-            await sendMessage(
-                sock,
-                CONFIG.OWNER_PHONE,
-                `📥 *New File Downloaded*\n\n👤 From: ${phoneNumber}\n📄 File: ${fileName}\n📊 Size: ${sizeInMB} MB\n📁 Folder: downloads/${phoneNumber}/`
-            );
+        // Clear existing timer if any
+        if (notificationTimers.has(phoneNumber)) {
+            clearTimeout(notificationTimers.get(phoneNumber)!);
         }
 
-    } catch (error) {
-        logger.error({ error, phoneNumber, fileName }, 'Failed to download document');
-        await sendMessage(sock, phoneNumber, '❌ Failed to download file. Please try again.');
+        // Set 10-second timer for notification
+        const timer = setTimeout(async () => {
+            await sendFileReceivedNotification(phoneNumber);
+            notificationTimers.delete(phoneNumber);
+        }, 10000); // 10 seconds
+
+        notificationTimers.set(phoneNumber, timer);
+
+        logger.info({ phoneNumber }, 'Set 10s timer for notification');
+
+    } catch (error: any) {
+        logger.error({ error: error?.message || error }, 'Failed to download document');
     }
 }
 
-async function handleTextMessage(sock: any, phoneNumber: string, text: string) {
-    const sendMessageFunc = (msg: string) => sendMessage(sock, phoneNumber, msg);
+async function sendFileReceivedNotification(phoneNumber: string) {
+    try {
+        const job = getJob(phoneNumber);
+        if (!job || job.files.length === 0) return;
+
+        // Send acknowledgment to customer
+        const fileList = job.files.map((f, idx) => `${idx + 1}. ${f.fileName}`).join('\n');
+        const message = `📄 *Files Received*\n\nTotal: ${job.files.length} PDF(s)\n\n${fileList}\n\n💬 Reply with any message when ready to print!`;
+
+        await sendMessageToUser(phoneNumber, message);
+
+        // Notify shop owner (if enabled)
+        if (CONFIG.NOTIFY_OWNER) {
+            const ownerMessage = `📥 *New Files Downloaded*\n\n👤 From: ${phoneNumber}\n📄 Files: ${job.files.length}\n${fileList}\n\n📁 Folder: downloads/${phoneNumber}/`;
+            await sendMessageToUser(CONFIG.OWNER_PHONE, ownerMessage);
+        }
+
+        logger.info({ phoneNumber, fileCount: job.files.length }, 'Sent notification after 10s');
+    } catch (error: any) {
+        logger.error({ error: error?.message || error }, 'Failed to send notification');
+    }
+}
+
+async function handleTextMessage(phoneNumber: string, text: string) {
+    // Cancel notification timer since user sent a message
+    if (notificationTimers.has(phoneNumber)) {
+        clearTimeout(notificationTimers.get(phoneNumber)!);
+        notificationTimers.delete(phoneNumber);
+        logger.info({ phoneNumber }, 'Cancelled notification timer (user sent message)');
+    }
+
+    const sendMessageFunc = async (msg: string) => {
+        await sendMessageToUser(phoneNumber, msg);
+    };
+
     const ownerNotifyFunc = CONFIG.NOTIFY_OWNER
-        ? (msg: string) => sendMessage(sock, CONFIG.OWNER_PHONE, msg)
+        ? async (msg: string) => {
+            await sendMessageToUser(CONFIG.OWNER_PHONE, msg);
+        }
         : undefined;
+
     await handleUserMessage(phoneNumber, text, sendMessageFunc, ownerNotifyFunc);
 }
 
-async function sendMessage(sock: any, phoneNumber: string, text: string) {
+async function sendMessageToUser(phoneNumber: string, text: string) {
     try {
-        await sock.sendMessage(`${phoneNumber}@s.whatsapp.net`, { text });
-        logger.info({ phoneNumber, preview: text.substring(0, 50) }, 'Sent message');
-    } catch (error) {
-        logger.error({ error, phoneNumber }, 'Failed to send message');
+        // Try using stored chat object first (most reliable)
+        const storedChat = userChats.get(phoneNumber);
+        if (storedChat) {
+            await storedChat.sendMessage(text);
+            logger.info({ phoneNumber, preview: text.substring(0, 50), method: 'stored-chat' }, 'Sent message');
+            return;
+        }
+
+        // Fallback: try direct sendMessage
+        const chatId = `${phoneNumber}@c.us`;
+        await client.sendMessage(chatId, text);
+        logger.info({ phoneNumber, preview: text.substring(0, 50), method: 'direct' }, 'Sent message');
+
+    } catch (error: any) {
+        logger.error({
+            phoneNumber,
+            errorMessage: error?.message || 'Unknown error',
+            errorName: error?.name
+        }, 'Failed to send message - ALL METHODS');
     }
 }
