@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp-baileys-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp automation bot using Baileys library",
+  "main": "whatsapp-bot.js",
+  "scripts": {
+    "start": "node whatsapp-bot.js",
+    "clean": "node clean-auth.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "automation",
+    "bot"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
